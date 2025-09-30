@@ -1,4 +1,5 @@
-// src/handlers/messageHandler.js
+const fs = require('fs');
+const path = require('path');
 const { getUser, users } = require('../users');
 const { sendHallScheme } = require('../messages');
 const { getActionKeyboard } = require('../keyboards');
@@ -12,7 +13,6 @@ function sortSeatsByRow(seats) {
         return rowA - rowB;
     });
 }
-
 // Функция сортировки строк с местами (для /getBookingList)
 function sortSeatStringsByRow(seats) {
     return seats.slice().sort((a, b) => {
@@ -63,7 +63,15 @@ async function handleMessage(msg, bot) {
             }
         }
 
-        await bot.sendMessage(chatId, bookingText.trim());
+        // создаём временный файл
+        const filePath = path.join(__dirname, 'bookingList.txt');
+        fs.writeFileSync(filePath, bookingText.trim());
+
+        await bot.sendDocument(chatId, filePath, {}, { filename: 'BookingList.txt' });
+
+        // удаляем файл после отправки
+        fs.unlinkSync(filePath);
+
     } else if (text === '/clearAnySeats') {
         let allSeats = [];
         for (const u of Object.values(users)) {
