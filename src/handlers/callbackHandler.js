@@ -31,6 +31,12 @@ async function handleCallback(query, bot) {
 
     // Выбор места
     if (/^\d+-\d+-\d+$/.test(data)) {
+        // --- проверка лимита 10 билетов ---
+        if (user.selectedSeats.length >= 10) {
+            return await bot.sendMessage(chatId, '🚫 Нельзя забронировать больше 10 мест!');
+        }
+        // --- конец проверки ---
+
         const [sectionId, rowNum, seatNum] = data.split('-').map(Number);
         const seat = hall[sectionId].rows[rowNum].find(s => s.number === seatNum);
 
@@ -95,7 +101,6 @@ async function handleCallback(query, bot) {
         await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: messageId });
         await bot.sendSticker(chatId, 'https://cdn2.combot.org/siba_oscar/webp/31xf09f98a2.webp');
 
-        // сортируем список билетов по ряду перед показом клавиатуры
         user.selectedSeats = sortSeatStringsByRow(user.selectedSeats);
 
         await bot.sendMessage(chatId, 'Выбери места, которые хочешь освободить:', {
