@@ -4,15 +4,6 @@ const { sendHallScheme } = require('../messages');
 const { getActionKeyboard } = require('../keyboards');
 const { pickupOptions } = require('../hall');
 
-// Функция сортировки объектов с seat (для /clearAnySeats)
-function sortSeatsByRow(seats) {
-    return seats.slice().sort((a, b) => {
-        const rowA = parseInt(a.seat.match(/Ряд (\d+)/)?.[1] || 0, 10);
-        const rowB = parseInt(b.seat.match(/Ряд (\d+)/)?.[1] || 0, 10);
-        return rowA - rowB;
-    });
-}
-
 // Функция сортировки строк с местами (для /getBookingList)
 function sortSeatStringsByRow(seats) {
     return seats.slice().sort((a, b) => {
@@ -70,28 +61,6 @@ async function handleMessage(msg, bot) {
         }
 
         await bot.sendMessage(chatId, bookingText.trim());
-    } else if (text === '/clearAnySeats') {
-        let allSeats = [];
-        for (const u of Object.values(users)) {
-            for (const seat of u.selectedSeats) {
-                allSeats.push({ seat, userId: u.id });
-            }
-        }
-
-        if (!allSeats.length) {
-            return await bot.sendMessage(chatId, 'Забронированных мест нет 😅');
-        }
-
-        allSeats = sortSeatsByRow(allSeats);
-
-        const seatKeyboard = allSeats.map(s => [
-            { text: s.seat.replace(/Секция \d+, /, ''), callback_data: `clearSeat_${s.userId}_${s.seat}` }
-        ]);
-        seatKeyboard.push([{ text: '⬅️ Назад', callback_data: 'back_to_menu' }]);
-
-        await bot.sendMessage(chatId, 'Выбери место для освобождения:', {
-            reply_markup: { inline_keyboard: seatKeyboard }
-        });
     } else {
         let randStickerNumber = Math.floor(Math.random() * 10);
         let neponLink = 'https://cdn2.combot.org/siba_oscar/webp/6xf09f97bf.webp';

@@ -154,33 +154,7 @@ async function handleCallback(query, bot) {
         await sendHallScheme(bot, chatId, getUser(chatId));
         return;
     }
-
-    if (data.startsWith('clearSeat_')) {
-        const [, userId, ...seatParts] = data.split('_');
-        const seat = seatParts.join('_');
-        const u = users[userId];
-        if (u) {
-            u.selectedSeats = u.selectedSeats.filter(s => s !== seat);
-        }
-
-        const allSeats = [];
-        for (const usr of Object.values(users)) {
-            for (const s of usr.selectedSeats) {
-                allSeats.push({ seat: s, userId: usr.id });
-            }
-        }
-
-        if (!allSeats.length) {
-            return await bot.editMessageText('Все места освобождены ✅', { chat_id: chatId, message_id: messageId });
-        }
-
-        const seatKeyboard = allSeats.map(s => [{ text: s.seat.replace(/Секция \d+, /, ''), callback_data: `clearSeat_${s.userId}_${s.seat}` }]);
-        seatKeyboard.push([{ text: '⬅️ Назад', callback_data: 'back_to_menu' }]);
-
-        await bot.editMessageReplyMarkup({ inline_keyboard: seatKeyboard }, { chat_id: chatId, message_id: messageId });
-        return;
-    }
-
+    
     if (data === 'back_to_menu') {
         await bot.editMessageText('Что хочешь сделать дальше?', {
             chat_id: chatId,
