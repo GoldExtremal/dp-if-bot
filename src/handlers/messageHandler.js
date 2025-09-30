@@ -1,4 +1,6 @@
 // src/handlers/messageHandler.js
+const fs = require('fs');
+const path = require('path');
 const { getUser, users } = require('../users');
 const { sendHallScheme } = require('../messages');
 const { getActionKeyboard } = require('../keyboards');
@@ -60,7 +62,15 @@ async function handleMessage(msg, bot) {
             }
         }
 
-        await bot.sendMessage(chatId, bookingText.trim());
+        // await bot.sendMessage(chatId, bookingText.trim());
+        // создаём временный файл
+        const filePath = path.join(__dirname, 'bookingList.txt');
+        fs.writeFileSync(filePath, bookingText.trim());
+
+        await bot.sendDocument(chatId, filePath, {}, { filename: 'BookingList.txt' });
+
+        // удаляем файл после отправки
+        fs.unlinkSync(filePath);
     } else {
         let randStickerNumber = Math.floor(Math.random() * 10);
         let neponLink = 'https://cdn2.combot.org/siba_oscar/webp/6xf09f97bf.webp';
