@@ -1,19 +1,10 @@
-const fs = require('fs');
-const path = require('path');
+// src/handlers/callbackHandler.js
 const { getUser, users } = require('../users');
+const { hall, pickupOptions } = require('../hall');
+const { getActionKeyboard, getCancelKeyboard, getPickupKeyboard, getSeatsKeyboard } = require('../keyboards');
 const { sendHallScheme } = require('../messages');
-const { getActionKeyboard } = require('../keyboards');
-const { pickupOptions } = require('../hall');
 
-// Функция сортировки объектов с seat (для /clearAnySeats)
-function sortSeatsByRow(seats) {
-    return seats.slice().sort((a, b) => {
-        const rowA = parseInt(a.seat.match(/Ряд (\d+)/)?.[1] || 0, 10);
-        const rowB = parseInt(b.seat.match(/Ряд (\d+)/)?.[1] || 0, 10);
-        return rowA - rowB;
-    });
-}
-// Функция сортировки строк с местами (для /getBookingList)
+// сортировка массива строк мест по номеру ряда
 function sortSeatStringsByRow(seats) {
     return seats.slice().sort((a, b) => {
         const rowA = parseInt(a.match(/Ряд (\d+)/)?.[1] || 0, 10);
@@ -22,98 +13,184 @@ function sortSeatStringsByRow(seats) {
     });
 }
 
-async function handleMessage(msg, bot) {
-    const chatId = msg.chat.id;
+async function handleCallback(query, bot) {
+    const chatId = query.message.chat.id;
+    const messageId = query.message.message_id;
+    const data = query.data;
     const user = getUser(chatId);
-    const text = msg.text;
 
-    if (text === '/start') {
-        await bot.sendSticker(chatId, 'https://cdn2.combot.org/siba_oscar/webp/0xf09f918b.webp');
-        await bot.sendMessage(chatId, `Здесь ты можешь забронировать места или отменить бронь на концерт *"День Первокурсника"* Института Физики КФУ.\n\n📍Большой зал, КСК УНИКС\n🕓 17:00 10.10.2025`, { parse_mode: "Markdown" });
-        await bot.sendMessage(chatId, 'Чтобы продолжить, введи, пожалуйста, свои *Фамилию Имя*', { parse_mode: "Markdown" });
-        await bot.sendSticker(chatId, 'https://cdn2.combot.org/siba_oscar/webp/3xf09f98a0.webp');
-    } else if (text && text.split(' ').length === 2) {
-        user.name = text;
-        await bot.sendSticker(chatId, 'https://cdn2.combot.org/siba_oscar/webp/66xf09fa5b0.webp');
-        await sendHallScheme(bot, chatId, user);
-    } else if (text === '/getBookingList') {
-        let bookingText = '';
+    await bot.answerCallbackQuery(query.id);
 
-        for (const option of pickupOptions) {
-            bookingText += `\n🔥${option}\n\n`;
+    // Выбор секции (число)
+    if (/^\d+$/.test(data)) {
+        const sectionId = data;
+        await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: messageId });
+        await bot.sendMessage(chatId, `Ты выбрал(а) секцию ${sectionId}, номера рядов указаны слева\n\n❌ - занято\n✅ - свободно\n◼️ - недоступно\n\nВыбери места:`, { reply_markup: getSeatsKeyboard(sectionId, user) });
+        return;
+    }
 
-            const bookedUsers = Object.values(users).filter(u => u.pickupOption === option && u.selectedSeats.length);
-
-            if (!bookedUsers.length) {
-                bookingText += `   (нет броней)\n\n`;
-                continue;
-            }
-
-            for (const u of bookedUsers) {
-                bookingText += `    ${u.name} {\n`;
-
-                // сортируем места по номеру ряда
-                const sortedSeats = sortSeatStringsByRow(u.selectedSeats);
-
-                for (const seat of sortedSeats) {
-                    const cleanSeat = seat.replace(/Секция \d+, /, '');
-                    bookingText += `        ${cleanSeat}\n`;
-                }
-                bookingText += `    }\n\n`;
-            }
+    // Выбор места
+    if (/^\d+-\d+-\d+$/.test(data)) {
+        if (user.selectedSeats.length >= 10) {
+            return await bot.sendMessage(chatId, '🚫 Нельзя забронировать больше 10 мест!');
         }
 
-        // создаём временный файл
-        const filePath = path.join(__dirname, 'bookingList.txt');
-        fs.writeFileSync(filePath, bookingText.trim());
+        const [sectionId, rowNum, seatNum] = data.split('-').map(Number);
+        const seat = hall[sectionId].rows[rowNum].find(s => s.number === seatNum);
 
-        await bot.sendDocument(chatId, filePath, {}, { filename: 'BookingList.txt' });
+        if (seat.status === '◼️') return await bot.sendMessage(chatId, 'Место недоступно 🚫');
+        if (seat.status === '❌') return await bot.sendMessage(chatId, 'Место занято 😔');
 
-        // удаляем файл после отправки
-        fs.unlinkSync(filePath);
+        seat.status = '❌';
+        user.selectedSeats.push(`Секция ${sectionId}, Ряд ${rowNum}, Место ${seatNum}`);
 
-    } else if (text === '/clearAnySeats') {
-        let allSeats = [];
-        for (const u of Object.values(users)) {
-            for (const seat of u.selectedSeats) {
-                allSeats.push({ seat, userId: u.id });
+        await bot.editMessageReplyMarkup(getSeatsKeyboard(sectionId, user), { chat_id: chatId, message_id: messageId });
+        await bot.sendMessage(chatId, `Ты забронировал(а) ряд ${rowNum}, место ${seatNum} ✅`);
+        return;
+    }
+
+
+    // Завершение бронирования
+    if (data === 'finish_booking') {
+        await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: messageId });
+        if (!user.selectedSeats.length) {
+            await bot.sendMessage(chatId, 'Ты не выбрал(а) ни одного места. 😅');
+            await bot.sendMessage(chatId, 'Что хочешь сделать дальше?', { reply_markup: getActionKeyboard() });
+        } else {
+            await bot.sendMessage(chatId, 'Выбери место получения билетов:', { reply_markup: getPickupKeyboard(pickupOptions) });
+        }
+        return;
+    }
+
+    // Выбор получения билетов
+    if (/^pickup_\d+$/.test(data)) {
+        const index = Number(data.split('_')[1]);
+        user.pickupOption = pickupOptions[index];
+        await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: messageId });
+        await bot.sendSticker(chatId, 'https://cdn2.combot.org/siba_oscar/webp/62xf09fa4a9.webp');
+        await bot.sendMessage(chatId, `Заберешь билеты здесь:\n${user.pickupOption}`);
+        await bot.sendMessage(chatId, 'Что хочешь сделать дальше?', { reply_markup: getActionKeyboard() });
+        return;
+    }
+
+    // Просмотр всех билетов
+    if (data === 'all_tickets') {
+        await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: messageId });
+        if (!user.selectedSeats.length) {
+            await bot.sendMessage(chatId, 'У тебя пока нет билетов. 😅');
+        } else {
+            const sortedSeats = sortSeatStringsByRow(user.selectedSeats);
+            const seatsList = sortedSeats.map(seat => seat.replace(/Секция \d+, /, '')).join('\n');
+            const pickup = user.pickupOption ? `\n\nМесто получения: \n${user.pickupOption}` : '';
+            await bot.sendSticker(chatId, 'https://cdn2.combot.org/siba_oscar/webp/25xf09f9898.webp');
+            await bot.sendMessage(chatId, `Все твои билеты:\n\n${seatsList}${pickup}`);
+        }
+        await bot.sendMessage(chatId, 'Что хочешь сделать дальше?', { reply_markup: getActionKeyboard() });
+        return;
+    }
+
+    // Отмена билетов
+    if (data === 'cancel_tickets') {
+        if (!user.selectedSeats.length) {
+            await bot.sendMessage(chatId, 'Нет билетов для отмены 😅');
+            await bot.sendMessage(chatId, 'Что хочешь сделать дальше?', { reply_markup: getActionKeyboard() });
+            return;
+        }
+
+        await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: messageId });
+        await bot.sendSticker(chatId, 'https://cdn2.combot.org/siba_oscar/webp/31xf09f98a2.webp');
+
+        // сортируем список билетов по ряду перед показом клавиатуры
+        user.selectedSeats = sortSeatStringsByRow(user.selectedSeats);
+
+        await bot.sendMessage(chatId, 'Выбери места, которые хочешь освободить:', {
+            reply_markup: getCancelKeyboard(user)
+        });
+
+        return;
+    }
+
+    // Удаление конкретного билета
+    if (/^cancel_\d+$/.test(data)) {
+        const index = Number(data.split('_')[1]);
+        const seatText = user.selectedSeats[index];
+        const match = seatText.match(/Секция (\d+), Ряд (\d+), Место (\d+)/);
+        if (match) {
+            const sectionId = Number(match[1]);
+            const rowNum = Number(match[2]);
+            const seatNum = Number(match[3]);
+            const seat = hall[sectionId].rows[rowNum].find(s => s.number === seatNum);
+            if (seat) seat.status = '✅';
+        }
+        user.selectedSeats.splice(index, 1);
+
+        if (user.selectedSeats.length) {
+            user.selectedSeats = sortSeatStringsByRow(user.selectedSeats);
+            await bot.editMessageReplyMarkup(getCancelKeyboard(user), { chat_id: chatId, message_id: messageId });
+        } else {
+            await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: messageId });
+            await bot.sendSticker(chatId, 'https://cdn2.combot.org/siba_oscar/webp/75xf09f988e.webp');
+            await bot.sendMessage(chatId, 'Все билеты удалены.');
+            await bot.sendMessage(chatId, 'Что хочешь сделать дальше?', { reply_markup: getActionKeyboard() });
+        }
+        return;
+    }
+
+    if (data === 'back_to_actions') {
+        await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: messageId });
+        await bot.sendMessage(chatId, 'Что хочешь сделать дальше?', { reply_markup: getActionKeyboard() });
+    }
+
+    if (data === 'book_more') {
+        await bot.sendSticker(chatId, 'https://cdn2.combot.org/siba_oscar/webp/40xf09f988d.webp');
+        await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: messageId });
+        await sendHallScheme(bot, chatId, getUser(chatId));
+    }
+
+    if (data === 'noop') return;
+
+    if (data === 'back_to_sections') {
+        await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: messageId });
+        await sendHallScheme(bot, chatId, getUser(chatId));
+        return;
+    }
+
+    if (data.startsWith('clearSeat_')) {
+        const [, userId, ...seatParts] = data.split('_');
+        const seat = seatParts.join('_');
+        const u = users[userId];
+        if (u) {
+            u.selectedSeats = u.selectedSeats.filter(s => s !== seat);
+        }
+
+        const allSeats = [];
+        for (const usr of Object.values(users)) {
+            for (const s of usr.selectedSeats) {
+                allSeats.push({ seat: s, userId: usr.id });
             }
         }
 
         if (!allSeats.length) {
-            return await bot.sendMessage(chatId, 'Забронированных мест нет 😅');
+            return await bot.editMessageText('Все места освобождены ✅', { chat_id: chatId, message_id: messageId });
         }
 
-        allSeats = sortSeatsByRow(allSeats);
-
-        const seatKeyboard = allSeats.map(s => [
-            { text: s.seat.replace(/Секция \d+, /, ''), callback_data: `clearSeat_${s.userId}_${s.seat}` }
-        ]);
+        const seatKeyboard = allSeats.map(s => [{ text: s.seat.replace(/Секция \d+, /, ''), callback_data: `clearSeat_${s.userId}_${s.seat}` }]);
         seatKeyboard.push([{ text: '⬅️ Назад', callback_data: 'back_to_menu' }]);
 
-        await bot.sendMessage(chatId, 'Выбери место для освобождения:', {
-            reply_markup: { inline_keyboard: seatKeyboard }
+        await bot.editMessageReplyMarkup({ inline_keyboard: seatKeyboard }, { chat_id: chatId, message_id: messageId });
+        return;
+    }
+
+    if (data === 'back_to_menu') {
+        await bot.editMessageText('Что хочешь сделать дальше?', {
+            chat_id: chatId,
+            message_id: messageId,
+            reply_markup: getActionKeyboard()
         });
-    } else {
-        let randStickerNumber = Math.floor(Math.random() * 10);
-        let neponLink = 'https://cdn2.combot.org/siba_oscar/webp/6xf09f97bf.webp';
-
-        if (randStickerNumber == 0 || randStickerNumber == 1) neponLink = 'https://cdn2.combot.org/siba_oscar/webp/100xf09f9984.webp';
-        if (randStickerNumber == 2 || randStickerNumber == 3) neponLink = 'https://cdn2.combot.org/siba_oscar/webp/83xf09fa494.webp';
-        if (randStickerNumber == 4 || randStickerNumber == 5) neponLink = 'https://cdn2.combot.org/siba_oscar/webp/48xf09f9982.webp';
-        if (randStickerNumber == 6 || randStickerNumber == 7) neponLink = 'https://cdn2.combot.org/siba_oscar/webp/47xf09fa4af.webp';
-        if (randStickerNumber == 8 || randStickerNumber == 9) neponLink = 'https://cdn2.combot.org/siba_oscar/webp/6xf09f97bf.webp';
-
-        await bot.sendSticker(chatId, neponLink);
-
-        if (user.name) {
-            await bot.sendMessage(chatId, 'Что хочешь сделать дальше?', { reply_markup: getActionKeyboard() });
-        } else {
-            await bot.sendMessage(chatId, 'Чтобы продолжить, введи, пожалуйста, свои *Фамилию Имя*', { parse_mode: "Markdown" });
-        }
+        return;
     }
 }
 
 module.exports = {
-    handleMessage
+    handleCallback
 };
